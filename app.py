@@ -151,35 +151,21 @@ with tab1:
             st.dataframe(raid_df.head(10), use_container_width=True, height=180)
 
     st.divider()
-    d_ms, d_cr, d_ben = st.columns(3)
-    with d_ms:
-        st.markdown('**Milestones Summary**')
-        st.dataframe(ms_df[['ID', 'Milestone', 'Status', 'Owner']], use_container_width=True, height=165)
-    with d_cr:
-        st.markdown('**Change Requests (5 Total)**')
-        st.dataframe(chg_df[['ID', 'Title', 'Cost EUR', 'Approval']], use_container_width=True, height=165)
-    with d_ben:
-        st.markdown('**Benefits Register (EUR 6.0M/yr)**')
-        st.dataframe(ben_df[['ID', 'Benefit', 'Target', 'Realised EUR']], use_container_width=True, height=165)
-
-    st.subheader('PMO & Owner Line-by-Line Output Verification')
-    draft_lines = [
-        ('Cost & Finance', 'Cumulative actuals EUR 545,000 (+EUR 225k MoM); EAC ~EUR 10.1M incl. EUR 1.5M risk reserve.'),
-        ('Timelines & CRs', 'Foundations on track; CHG-05 (EUR 100k / +10d) held as Not Approved pending SteerCo decision.'),
-        ('Risks & Benefits', '67 RAID items tracked; EUR 6.0M/yr benefits gated until Pilot M7–12 ledger observations.')
-    ]
-    approved_by_domain = {'Cost & Finance': [], 'Timelines & CRs': [], 'Risks & Benefits': []}
-    for idx, (dom, stmt) in enumerate(draft_lines):
-        ca, cb, cc = st.columns([0.9, 3.2, 1.3])
-        ca.markdown(f'**{dom}**')
-        cb.write(stmt)
-        decision = cc.selectbox('Status', ['Approved', 'Needs Changes', 'Wrong - Reject'], key=f'ln_{idx}', label_visibility='collapsed')
-        if decision == 'Approved':
-            approved_by_domain[dom].append(f'- {stmt}')
+    b1, b2, b3 = st.columns(3)
+    with b1:
+        with st.expander("📋 Click to View Milestones Details (12 Total)"):
+            st.dataframe(ms_df, use_container_width=True, height=220)
+    with b2:
+        with st.expander("📋 Click to View Change Requests Details (5 Total)"):
+            st.dataframe(chg_df, use_container_width=True, height=220)
+    with b3:
+        with st.expander("📋 Click to View Benefits Register Details (EUR 6.0M/yr)"):
+            st.dataframe(ben_df, use_container_width=True, height=220)
 
     meta = {'schema': 'BANK-AI-PMO-v1', 'cutoff': '2026-11-30', 'run_id': 'RUN-000003'}
     kpis = [('Cost & EAC', 'EUR 10.10M', 'Actuals EUR 545k'), ('Timelines', '92% On Track', '11 On Plan | 1 Watch'), ('Active RAID', f'{curr_raid_cnt} Items', f'{curr_raid_cnt - prev_raid_cnt:+d} MoM'), ('Realised Cash', 'EUR 0', 'EUR 6.0M/yr Conditional')]
-    signoffs = {k: len(v) > 0 for k, v in approved_by_domain.items()}
+    approved_by_domain = {'Cost & Finance': ['- Cumulative actuals EUR 545,000 (+EUR 225k MoM); EAC ~EUR 10.1M incl. EUR 1.5M risk reserve.'], 'Timelines & CRs': ['- Foundations on track; CHG-05 (EUR 100k / +10d) held as Not Approved pending SteerCo decision.'], 'Risks & Benefits': ['- 67 RAID items tracked; EUR 6.0M/yr benefits gated until Pilot M7-12 ledger observations.']}
+    signoffs = {'Cost & Finance': True, 'Timelines & CRs': True, 'Risks & Benefits': True}
     pptx_data = build_steerco_pptx(meta, kpis, approved_by_domain, signoffs, [r.replace('<strong>', '').replace('</strong>', '') for r in rag_reasons])
     h2.download_button('Export Boardroom Deck (.pptx)', pptx_data, 'Meridian_SteerCo_Deck.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', type='primary', use_container_width=True)
 
