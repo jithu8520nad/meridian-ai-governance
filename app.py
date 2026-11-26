@@ -125,32 +125,13 @@ def make_donut(df_chart):
         tooltip=['Category', 'Label']
     ).properties(height=275)
 
-tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    '0. Case Study & Architecture',
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     '1. SteerCo One-Pager & Line Approval',
     '2. Financials & MoM Variance',
     '3. Scope & Change Control (5 CRs)',
     '4. RAID & Governance (67 Items)',
     '5. Benefits & Next-Month Rollover'
 ])
-
-with tab0:
-    ov1, ov2 = st.columns([1.4, 1.0])
-    with ov1:
-        st.subheader('Programme Expertise Applied to AI Transformation')
-        st.markdown('**The Business Problem:** Meridian Retail Bank (fictional) faces high administrative effort, fragmented knowledge, slow decisions, and inconsistent governance across a **EUR 10.0M, 24-month** transformation programme.')
-        st.markdown('**The Governed Solution:** Rather than rebuilding 10 separate files for 5 meetings, one maintained Master Workbook (`Programme_Data.xlsx`) feeds consistent executive reports through **5 bounded AI roles** with **human sign-off gates** before release.')
-        st.markdown('**Delivery & Regulatory Framework:** Waterfall stage-gate governance paired with Agile delivery, mapped to **DORA**, **BaFin/MaRisk**, **GDPR**, and **ECB governance expectations**.')
-        st.link_button('Read Full Narrative Case Study Website', 'https://chatgpt.site')
-    with ov2:
-        st.subheader('5 Bounded Roles & Human Authority')
-        st.table(pd.DataFrame([
-            {'Role': 'Orchestrator', 'Responsibility': 'Consolidates validated findings; marks unresolved items pending.'},
-            {'Role': 'Data Steward', 'Responsibility': 'Sole record writer; enforces evidence IDs & audit trail.'},
-            {'Role': 'PMO & Finance', 'Responsibility': 'Read-only schedule/cost analysis; PMO & Finance validate.'},
-            {'Role': 'Business Analyst', 'Responsibility': 'Read-only scope/CR/benefit analysis; BA Lead validates.'},
-            {'Role': 'Governance', 'Responsibility': 'Read-only DORA/MaRisk/GDPR checks; Control Owner validates.'}
-        ]))
 
 with tab1:
     p1, p2, p3 = st.columns(3)
