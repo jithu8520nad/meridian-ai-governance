@@ -1,0 +1,281 @@
+{
+  "name": "Meridian Retail Bank - Enterprise AI Governance SoD Flow",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "n1",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\n  \"program\": \"Meridian Retail Bank Enterprise AI Transformation\",\n  \"approved_records\": {\"milestones\": [{\"id\": \"MS-01\", \"name\": \"Core Banking Cloud Data Lake Ingestion\", \"status\": \"COMPLETED\", \"owner\": \"Sarah Jenkins\", \"evidence_id\": \"EVD-2026-089\"}]},\n  \"incoming_update\": {\"id\": \"CR-04\", \"title\": \"Decommission Legacy Mainframe Fraud Engine\", \"owner_confirmed\": false, \"evidence_id\": null}\n}"
+      },
+      "id": "n2",
+      "name": "Set Node (Master Workbook JSON)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.incoming_update.owner_confirmed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "leftValue": "={{ $json.incoming_update.evidence_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "n3",
+      "name": "IF Node (Agent 0 Validation Gate)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        540,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://googleapis.com",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"contents\": [{\"parts\": [{\"text\": \"Agent 1 PMO (Read-Only): Analyze schedule and milestones. Mark missing data as UNKNOWN. Data: \" + JSON.stringify($json)}]}]} }}"
+      },
+      "id": "n4",
+      "name": "Agent 1: PMO (Gemini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://googleapis.com",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"contents\": [{\"parts\": [{\"text\": \"Agent 2 BA (Read-Only): Analyze scope and CRs. Mark missing owners or evidence as UNKNOWN. Data: \" + JSON.stringify($json)}]}]} }}"
+      },
+      "id": "n5",
+      "name": "Agent 2: BA (Gemini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://googleapis.com",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"contents\": [{\"parts\": [{\"text\": \"Agent 3 Governance (Read-Only): Verify audit traceability and SoD. Mark missing data as UNKNOWN. Data: \" + JSON.stringify($json)}]}]} }}"
+      },
+      "id": "n6",
+      "name": "Agent 3: Governance (Gemini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 3
+      },
+      "id": "n7",
+      "name": "Merge Node",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1040,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "webhook"
+      },
+      "id": "n8",
+      "name": "Wait Node (Human Approval Gate)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\n  \"document_title\": \"Meridian Retail Bank - Steering Committee Pack\",\n  \"PMO_validated_by_owner\": true,\n  \"BA_validated_by_owner\": false,\n  \"Governance_validated_by_owner\": true,\n  \"Business_Analysis_Scope\": \"PENDING OWNER VALIDATION\"\n}"
+      },
+      "id": "n9",
+      "name": "Final Set Node (Orchestrator Pack)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1480,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Node (Master Workbook JSON)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Node (Master Workbook JSON)": {
+      "main": [
+        [
+          {
+            "node": "IF Node (Agent 0 Validation Gate)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Node (Agent 0 Validation Gate)": {
+      "main": [
+        [
+          {
+            "node": "Agent 1: PMO (Gemini)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Agent 2: BA (Gemini)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Agent 3: Governance (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Agent 1: PMO (Gemini)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Agent 2: BA (Gemini)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Agent 3: Governance (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent 1: PMO (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "Merge Node",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent 2: BA (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "Merge Node",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Agent 3: Governance (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "Merge Node",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge Node": {
+      "main": [
+        [
+          {
+            "node": "Wait Node (Human Approval Gate)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Node (Human Approval Gate)": {
+      "main": [
+        [
+          {
+            "node": "Final Set Node (Orchestrator Pack)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
