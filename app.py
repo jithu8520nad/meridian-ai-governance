@@ -4,7 +4,7 @@ import altair as alt
 import streamlit as st
 from exporters import build_steerco_pptx, build_steerco_docx, build_rollover_xlsx
 
-st.set_page_config(page_title='Meridian Retail Bank | Executive SteerCo', layout='wide', initial_sidebar_state='collapsed')
+st.set_page_config(page_title='Meridian Retail Bank | AI Transformation & SteerCo', layout='wide', initial_sidebar_state='collapsed')
 
 st.markdown('''<style>
 .block-container {padding-top: 2.3rem; padding-bottom: 0.5rem; max-width: 1420px;}
@@ -32,6 +32,8 @@ with st.sidebar:
     st.header('2. Mid-Month Change Intake')
     mid_month_item = st.text_input('Log Mid-Month Event / Fix', placeholder='e.g. CHG-05 CFO approval attached')
     chg05_approved = st.checkbox('Mark CHG-05 (EUR 100k) Approved', value=False)
+    st.divider()
+    st.link_button('Open Full Narrative Case Study', 'https://chatgpt.site', use_container_width=True)
 
 curr_bytes = curr_file.getvalue() if curr_file else None
 prev_bytes = prev_file.getvalue() if prev_file else None
@@ -66,8 +68,8 @@ if mid_month_item.strip():
     rag_reasons.append(f'4. <strong>Mid-Month Staged Update:</strong> {mid_month_item.strip()} (queued for month-end cutoff).')
 
 h1, h2 = st.columns([3.3, 1.2])
-h1.title('MERIDIAN RETAIL BANK — STEERING COMMITTEE ONE-PAGER')
-h1.caption(f'EUR 10.0M / 24-Month AI Transformation | Comparison: **{period_label}** | DORA · BaFin/MaRisk · GDPR · ECB')
+h1.title('MERIDIAN RETAIL BANK — STEERING COMMITTEE & AI GOVERNANCE')
+h1.caption('Jithu Nadviledath · MBA · PMP® · PRINCE2® Practitioner | EUR 10.0M / 24-Month Programme | DORA · BaFin/MaRisk · GDPR · ECB')
 
 st.markdown(f"<div class='{rag_cls}'><strong>OVERALL PROGRAMME RAG STATUS: {rag_status}</strong><br>{'<br>'.join(rag_reasons)}</div>", unsafe_allow_html=True)
 
@@ -82,15 +84,34 @@ def make_donut(df_chart):
         theta=alt.Theta(field='Value', type='quantitative'),
         color=alt.Color(field='Category', type='nominal', scale=alt.Scale(range=['#38BDF8', '#F59E0B', '#64748B', '#EF4444']), legend=alt.Legend(orient='bottom', columns=1, labelLimit=250, title=None)),
         tooltip=['Category', 'Label']
-    ).properties(height=285)
+    ).properties(height=280)
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    '0. Case Study & Architecture',
     '1. SteerCo One-Pager & Line Approval',
     '2. Financials & MoM Variance',
     '3. Scope & Change Control',
     '4. RAID & Governance',
     '5. Benefits & Next-Month Rollover'
 ])
+
+with tab0:
+    ov1, ov2 = st.columns([1.4, 1.0])
+    with ov1:
+        st.subheader('Programme Expertise Applied to AI Transformation')
+        st.markdown('**The Business Problem:** Meridian Retail Bank (fictional) faces high administrative effort, fragmented knowledge, slow decisions, and inconsistent governance across a **EUR 10.0M, 24-month** transformation programme.')
+        st.markdown('**The Governed Solution:** Rather than rebuilding 10 separate files for 5 meetings, one maintained Master Workbook (`Programme_Data.xlsx`) feeds consistent executive reports through **5 bounded AI roles** with **human sign-off gates** before release.')
+        st.markdown('**Delivery & Regulatory Framework:** Waterfall stage-gate governance paired with Agile delivery, mapped to **DORA**, **BaFin/MaRisk**, **GDPR**, and **ECB governance expectations**.')
+        st.link_button('Read Full Narrative Case Study Website', 'https://chatgpt.site')
+    with ov2:
+        st.subheader('5 Bounded Roles & Human Authority')
+        st.table(pd.DataFrame([
+            {'Role': 'Orchestrator', 'Responsibility': 'Consolidates validated findings; marks unresolved items pending.'},
+            {'Role': 'Data Steward', 'Responsibility': 'Sole record writer; enforces evidence IDs & audit trail.'},
+            {'Role': 'PMO & Finance', 'Responsibility': 'Read-only schedule/cost analysis; PMO & Finance validate.'},
+            {'Role': 'Business Analyst', 'Responsibility': 'Read-only scope/CR/benefit analysis; BA Lead validates.'},
+            {'Role': 'Governance', 'Responsibility': 'Read-only DORA/MaRisk/GDPR checks; Control Owner validates.'}
+        ]))
 
 with tab1:
     p1, p2, p3 = st.columns(3)
