@@ -111,17 +111,17 @@ h1.title('MERIDIAN RETAIL BANK — STEERING COMMITTEE & AI GOVERNANCE')
 st.markdown(f"<div class='{rag_cls}'><strong>OVERALL PORTFOLIO RAG STATUS: {rag_status}</strong><br>{'<br>'.join(rag_reasons)}</div>", unsafe_allow_html=True)
 
 m1, m2, m3, m4 = st.columns(4)
-m1.metric('Approved Budget: EUR 10.00M', 'YTD Actuals: EUR 545k', 'Forecast EAC: EUR 10.10M (+EUR 100k CHG-05 Held)' if not chg05_approved else 'Forecast EAC: EUR 10.00M (On Budget)', delta_color='inverse' if not chg05_approved else 'normal')
+m1.metric('Approved Budget: EUR 10.00M', 'EUR 545k YTD', 'EAC: EUR 10.10M (+EUR 100k Held)' if not chg05_approved else 'Forecast EAC: EUR 10.00M (On Budget)', delta_color='inverse' if not chg05_approved else 'normal')
 m2.metric('Timelines & Milestones', '92% On Track' if not chg05_approved else '100% On Track', '11 On Plan | 1 Buffer Watch (+10d)' if not chg05_approved else 'All Milestones On Plan', delta_color='off')
 m3.metric('Active Risks & RAID', f'{curr_raid_cnt} Items', f'{curr_raid_cnt - prev_raid_cnt:+d} vs Prior Month', delta_color='inverse' if curr_raid_cnt > prev_raid_cnt else 'normal')
 m4.metric('Realised Cash Benefits', 'EUR 0', 'EUR 6.0M/yr Conditional (Pilot M7–12)', delta_color='off')
 
 def make_donut(df_chart):
-    return alt.Chart(df_chart).mark_arc(innerRadius=50, outerRadius=95).encode(
+    return alt.Chart(df_chart).mark_arc(innerRadius=40, outerRadius=76).encode(
         theta=alt.Theta(field='Value', type='quantitative'),
         color=alt.Color(field='Category', type='nominal', scale=alt.Scale(range=['#38BDF8', '#F59E0B', '#64748B', '#EF4444']), legend=alt.Legend(orient='bottom', columns=1, labelLimit=250, title=None)),
         tooltip=['Category', 'Label']
-    ).properties(height=255)
+    ).properties(height=290)
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     '1. SteerCo One-Pager',
@@ -162,7 +162,7 @@ with tab1:
             st.dataframe(ben_df, width='stretch', height=220)
 
     meta = {'schema': 'BANK-AI-PMO-v1', 'cutoff': '2026-11-30', 'run_id': 'RUN-000003'}
-    kpis = [('Approved Budget', 'EUR 10.00M', 'YTD Actuals: EUR 545k'), ('Timelines', '92% On Track', '11 On Plan | 1 Watch'), ('Active RAID', f'{curr_raid_cnt} Items', f'{curr_raid_cnt - prev_raid_cnt:+d} MoM'), ('Realised Cash', 'EUR 0', 'EUR 6.0M/yr Conditional')]
+    kpis = [('Approved Budget', 'EUR 10.00M', 'EUR 545k YTD'), ('Timelines', '92% On Track', '11 On Plan | 1 Watch'), ('Active RAID', f'{curr_raid_cnt} Items', f'{curr_raid_cnt - prev_raid_cnt:+d} MoM'), ('Realised Cash', 'EUR 0', 'EUR 6.0M/yr Conditional')]
     approved_by_domain = {'Cost & Finance': ['- Approved budget EUR 10.00M; YTD actuals EUR 545,000 (+EUR 225k MoM); EAC ~EUR 10.10M incl. EUR 1.50M risk reserve.'], 'Timelines & CRs': ['- Foundations on track; CHG-05 (EUR 100k / +10d) held as Not Approved pending SteerCo decision.'], 'Risks & Benefits': ['- 67 RAID items tracked; EUR 6.0M/yr benefits gated until Pilot M7–12 ledger observations.']}
     signoffs = {'Cost & Finance': True, 'Timelines & CRs': True, 'Risks & Benefits': True}
     pptx_data = build_steerco_pptx(meta, kpis, approved_by_domain, signoffs, [r.replace('<strong>', '').replace('</strong>', '') for r in rag_reasons])
