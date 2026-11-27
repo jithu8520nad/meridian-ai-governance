@@ -1,4 +1,6 @@
 ﻿import os
+import json
+from record_review import render_review, open_items
 from datetime import datetime, timezone
 import pandas as pd
 import streamlit as st
@@ -27,7 +29,7 @@ st.markdown("""<style>
 .var-neg {color: #991b1b; font-weight: 600;}
 </style>""", unsafe_allow_html=True)
 
-CONFIG_VERSION = "BANK-AI-PMO-APP-v2.1"
+CONFIG_VERSION = "BANK-AI-PMO-APP-v2.2"
 
 with st.sidebar:
     st.header("1. Controlled Master Workbooks")
@@ -98,7 +100,26 @@ agent_out = run_bounded_agents(sheets, controls, fin, deliv, val_rep, api_key=ap
 if "reviews" not in st.session_state:
     st.session_state["reviews"] = {}
 review_gates = {k: verify_review_gate(k, v["content_hash"], wb_hash, fin["cutoff"], CONFIG_VERSION, st.session_state["reviews"].get(k)) for k, v in agent_out["sections"].items()}
+context = sha256_bytes(json.dumps([wb_hash, sha256_bytes(prev_bytes) if prev_sheets is not None else None,
+                                   fin["cutoff"], CONFIG_VERSION]).encode())
+history = st.session_state.setdefault("record_review_history", [])
+exceptions = open_items(history, context)
+for item in exceptions:
+    for section in item["affected_sections"]:
+        if section in review_gates:
+            st.session_state["reviews"].pop(section, None)
+            review_gates[section] = {"accepted": False, "status": "BLOCKED BY RECORD EXCEPTION",
+                                     "reason": "Resolve or correct disputed source data before sign-off."}
+if exceptions:
+    st.warning(f"{len(exceptions)} open record exception(s). Affected figures are provisional; exports are held.")
 all_accepted = all(g["accepted"] for g in review_gates.values())
+
+def review_panel(key, *names, extra=None):
+    sources = {name: json.loads(sheets[name].to_json(orient="records", date_format="iso"))
+               for name in names if name in sheets}
+    sources.update(extra or {})
+    render_review(st, sources, history, wb_hash, context, key)
+
 overall_review_label = "Simulated Owner-Acknowledged Pack" if all_accepted else "Draft · Pending Section Review"
 comp_label = f"{prev_controls.get('Simulation cutoff')} ({prev_name})" if prev_controls else "Current workbook baseline (no prior file uploaded)"
 
@@ -190,12 +211,13 @@ with tab_rev:
                 r_name = st.text_input("Simulated Reviewer", value="Owner Name", key=f"rev_{sec_key}")
                 r_out = st.selectbox("Outcome", ["Pending", "Approved", "Changes Requested", "Rejected"], key=f"out_{sec_key}")
                 r_com = st.text_input("Review Note", key=f"com_{sec_key}")
-                if st.button("Record Simulated Review", key=f"btn_{sec_key}"):
+                if st.button("Record Simulated Review", key=f"btn_{sec_key}", disabled=any(sec_key in x["affected_sections"] for x in exceptions)):
                     st.session_state["reviews"][sec_key] = {"reviewer": f"{r_name} (Simulated Acknowledgement)", "outcome": r_out, "comments": r_com, "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"), "workbook_hash": wb_hash, "cutoff": fin["cutoff"], "section_hash": sec_data["content_hash"], "config_version": CONFIG_VERSION}
                     st.rerun()
 
 with tab_cost:
     st.subheader("Monthly Finance & Cost Ledger Reconciliation")
+    review_panel("cost", "Monthly Finance", "Cost Ledger")
     mf_disp = sheets["Monthly Finance"].copy()
     for col in ["Baseline EUR", "Actual EUR", "Forecast EUR", "Variance EUR"]:
         if col in mf_disp.columns:
@@ -215,12 +237,17 @@ with tab_cost:
 
 with tab_ms:
     st.subheader("Milestones, Change Control & Backlog")
+    review_panel("delivery", "Milestones", "Changes", "Change Details", "Backlog")
     st.dataframe(sheets["Milestones"], width="stretch", height=180)
     st.dataframe(sheets["Changes"], width="stretch", height=200)
     st.dataframe(sheets["Backlog"], width="stretch", height=240)
 
 with tab_raid:
     st.subheader("RAID Register, Source Conflicts, Benefits & Checks")
+    st.dataframe(sheets["RAID"], width="stretch", height=220)
+    review_panel("controls", "RAID", "Conflicts", "Benefits Register", "Benefit Observations",
+                 extra={"Checks": val_rep.checks_summary,
+                        "Controls": [{"Finding": warning} for warning in val_rep.warnings]})
     if val_rep.warnings:
         for w in val_rep.warnings:
             st.warning(w)
@@ -232,6 +259,21 @@ meta = {"schema": SCHEMA_VERSION, "cutoff": fin["cutoff"], "run_id": controls.ge
 
 with tab_roll:
     st.subheader("Safe Next-Month Rollover & Complete 10-Artefact Reporting Pack")
+    st.markdown("### Shared exceptions queue")
+    st.caption("Items are shared across tabs for this session. Download the history before leaving. A new workbook requires fresh review.")
+    staged = {"Next cutoff": next_cutoff, "Event": ev_desc, "Evidence": ev_evid, "Staged": ev_auth}
+    review_panel("rollover", extra={"Rollover": [staged]})
+    if history:
+        st.download_button("Download record review history", json.dumps(history, indent=2),
+                           "Meridian_Record_Review_History.json", "application/json")
+    if exceptions:
+        st.dataframe([{ "Source": x["sheet"], "Record": str(x["record"]), "Decision": x["outcome"],
+                        "Reason": x["reason"], "Owner": x["owner"], "Due": x["due"],
+                        "Sections": ", ".join(x["affected_sections"])} for x in exceptions],
+                     hide_index=True)
+        st.warning("Reporting pack and rollover exports are held until the open exceptions are resolved.")
+        st.stop()
+    st.caption("No open reviewer exceptions for these inputs.")
     rollover_bytes, rollover_name, receipt = None, None, None
     staged_events = [{"authorized": ev_auth, "description": ev_desc, "evidence_id": ev_evid, "reviewer": ev_rev}] if ev_desc.strip() else []
     try:
