@@ -264,9 +264,9 @@ with tab_raid:
 meta = {"schema": SCHEMA_VERSION, "cutoff": fin["cutoff"], "run_id": controls.get("Last simulation run", "RUN-UNKNOWN"), "wb_hash": wb_hash, "overall_review_label": overall_review_label}
 
 with tab_roll:
-    st.subheader("Safe Next-Month Rollover & Complete 10-Artefact Reporting Pack")
+    st.subheader("Safe Next-Month Rollover & Complete Reporting Pack (up to 9 artefacts)")
     st.markdown("### Shared exceptions queue")
-    st.caption("Exceptions persist across sessions and workbook versions on this server. Closure requires documented evidence.")
+    st.caption("Demo: exceptions persist within your visitor session only. Closure requires documented evidence." if __import__("os").environ.get("MERIDIAN_PUBLIC_DEMO") == "1" else "Exceptions persist across sessions and workbook versions on this server. Closure requires documented evidence.")
     staged = {"Next cutoff": next_cutoff, "Event": ev_desc, "Evidence": ev_evid, "Staged": ev_auth}
     review_panel("rollover", extra={"Rollover": [staged]})
     render_closure(st, exceptions, wb_hash, context)
