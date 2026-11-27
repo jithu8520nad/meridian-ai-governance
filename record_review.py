@@ -47,6 +47,13 @@ def open_items(history, context):
     return [item for item in latest.values() if item["outcome"] != ACCEPT]
 
 def database_path():
+    if os.environ.get("MERIDIAN_PUBLIC_DEMO") == "1":
+        import streamlit as st
+        from uuid import uuid4
+        import tempfile
+        if "demo_review_db" not in st.session_state:
+            st.session_state["demo_review_db"] = str(Path(tempfile.gettempdir()) / ("meridian-demo-" + uuid4().hex + ".sqlite3"))
+        return Path(st.session_state["demo_review_db"])
     return Path(os.environ.get("MERIDIAN_REVIEW_DB", str(Path.home() / ".meridian" / "record_reviews.sqlite3")))
 
 def connect_history():
