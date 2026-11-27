@@ -1,5 +1,9 @@
-"""Session-scoped reporting dispositions; source records are never mutated."""
+"""Persistent simulated reporting dispositions; source records are never mutated."""
 import json
+import os
+import sqlite3
+from pathlib import Path
+from contextlib import closing
 from datetime import datetime, timezone
 from hashlib import sha256
 
@@ -42,6 +46,65 @@ def open_items(history, context):
     latest = {item["record_hash"]: item for item in history if item["context"] == context}
     return [item for item in latest.values() if item["outcome"] != ACCEPT]
 
+def database_path():
+    return Path(os.environ.get("MERIDIAN_REVIEW_DB", str(Path.home() / ".meridian" / "record_reviews.sqlite3")))
+
+def connect_history():
+    path = database_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path, timeout=15)
+    conn.execute("CREATE TABLE IF NOT EXISTS review_events (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)")
+    return conn
+
+def load_history():
+    with closing(connect_history()) as conn:
+        return [json.loads(row[0]) for row in conn.execute("SELECT payload FROM review_events ORDER BY id")]
+
+def unresolved_items(history):
+    latest = {}
+    for item in history:
+        if item.get("closes_exception"):
+            latest.pop(item["closes_exception"], None)
+        if item["outcome"] != ACCEPT:
+            latest[item["record_hash"]] = item
+    return list(latest.values())
+
+def save_decision(item, closure=None):
+    with closing(connect_history()) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
+        history = [json.loads(row[0]) for row in conn.execute("SELECT payload FROM review_events ORDER BY id")]
+        pending = {x["record_hash"]: x for x in unresolved_items(history)}
+        if closure:
+            if closure not in pending or item["outcome"] != ACCEPT:
+                raise ValueError("Select an open exception for closure.")
+            item = dict(item, closes_exception=closure)
+        elif item["outcome"] == ACCEPT and item["record_hash"] in pending:
+            raise ValueError("Use the shared exception queue to document closure.")
+        conn.execute("INSERT INTO review_events(payload) VALUES (?)", (json.dumps(item),))
+
+def render_closure(st, exceptions, workbook_hash, context):
+    if not exceptions:
+        return
+    with st.expander("Resolve an existing exception"):
+        selected = st.selectbox("Open exception", range(len(exceptions)),
+            format_func=lambda i: exceptions[i]["sheet"] + " | " + exceptions[i]["reason"])
+        item = exceptions[selected]
+        with st.form("exception_closure"):
+            reviewer = st.text_input("Closure reviewer (simulated)")
+            evidence = st.text_area("Correction evidence or documented override reference")
+            confirmed = st.checkbox("I confirm the correction or authorised override has been verified")
+            if st.form_submit_button("Close exception"):
+                try:
+                    if not confirmed or not evidence.strip():
+                        raise ValueError("Verification and evidence are required.")
+                    event = decision(item["sheet"], item["record"], ACCEPT, reviewer,
+                                     evidence, "", None, workbook_hash, context)
+                    save_decision(event, closure=item["record_hash"])
+                except (ValueError, sqlite3.Error, OSError) as err:
+                    st.error(str(err))
+                else:
+                    st.rerun()
+
 def render_review(st, sources, history, workbook_hash, context, key):
     with st.expander("Review a source record"):
         st.caption("Simulated disposition only. Corrections must be applied by the data owner in a new workbook version.")
@@ -66,8 +129,8 @@ def render_review(st, sources, history, workbook_hash, context, key):
             due=st.date_input("Correction due",value=None)
             if st.form_submit_button("Record decision"):
                 try:
-                    history.append(decision(sheet,row,choice,reviewer,reason,owner,due,workbook_hash,context))
-                except ValueError as err:
+                    save_decision(decision(sheet,row,choice,reviewer,reason,owner,due,workbook_hash,context))
+                except (ValueError, sqlite3.Error, OSError) as err:
                     st.error(str(err))
                 else:
                     st.rerun()
