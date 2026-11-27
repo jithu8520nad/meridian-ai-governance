@@ -1,6 +1,7 @@
 ﻿import os
 import json
-from record_review import render_review, open_items
+from record_review import render_review, load_history, unresolved_items, render_closure
+import sqlite3
 from datetime import datetime, timezone
 import pandas as pd
 import streamlit as st
@@ -102,8 +103,13 @@ if "reviews" not in st.session_state:
 review_gates = {k: verify_review_gate(k, v["content_hash"], wb_hash, fin["cutoff"], CONFIG_VERSION, st.session_state["reviews"].get(k)) for k, v in agent_out["sections"].items()}
 context = sha256_bytes(json.dumps([wb_hash, sha256_bytes(prev_bytes) if prev_sheets is not None else None,
                                    fin["cutoff"], CONFIG_VERSION]).encode())
-history = st.session_state.setdefault("record_review_history", [])
-exceptions = open_items(history, context)
+try:
+    history = load_history()
+except (sqlite3.Error, OSError, ValueError):
+    st.error("Review storage unavailable. Reporting is blocked.")
+    st.stop()
+st.session_state["record_review_history"] = history
+exceptions = unresolved_items(history)
 for item in exceptions:
     for section in item["affected_sections"]:
         if section in review_gates:
@@ -260,9 +266,10 @@ meta = {"schema": SCHEMA_VERSION, "cutoff": fin["cutoff"], "run_id": controls.ge
 with tab_roll:
     st.subheader("Safe Next-Month Rollover & Complete 10-Artefact Reporting Pack")
     st.markdown("### Shared exceptions queue")
-    st.caption("Items are shared across tabs for this session. Download the history before leaving. A new workbook requires fresh review.")
+    st.caption("Exceptions persist across sessions and workbook versions on this server. Closure requires documented evidence.")
     staged = {"Next cutoff": next_cutoff, "Event": ev_desc, "Evidence": ev_evid, "Staged": ev_auth}
     review_panel("rollover", extra={"Rollover": [staged]})
+    render_closure(st, exceptions, wb_hash, context)
     if history:
         st.download_button("Download record review history", json.dumps(history, indent=2),
                            "Meridian_Record_Review_History.json", "application/json")
