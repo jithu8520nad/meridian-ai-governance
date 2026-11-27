@@ -32,7 +32,9 @@ st.markdown("""<style>
 
 CONFIG_VERSION = "BANK-AI-PMO-APP-v2.2"
 
-PUBLIC_DEMO = os.environ.get("MERIDIAN_PUBLIC_DEMO") == "1"
+PUBLIC_DEMO = os.environ.get("MERIDIAN_PUBLIC_DEMO", "1") == "1"
+if PUBLIC_DEMO:
+    os.environ["MERIDIAN_PUBLIC_DEMO"] = "1"
 
 with st.sidebar:
     st.header("1. Controlled Master Workbooks")
