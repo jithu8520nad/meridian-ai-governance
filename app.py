@@ -37,6 +37,18 @@ if PUBLIC_DEMO:
     os.environ["MERIDIAN_PUBLIC_DEMO"] = "1"
 
 with st.sidebar:
+    with st.expander("User Guide & Sample Deliverables", expanded=False):
+        st.caption("Learn the workflow and explore illustrative PM / PMO examples.")
+        for label, filename, mime in [
+            ("Download SOP", "USER_GUIDE.md", "text/markdown"),
+            ("Download sample finance exception", "SAMPLE_EXCEPTION.csv", "text/csv"),
+            ("Download sample SteerCo brief", "SAMPLE_STEERCO_BRIEF.md", "text/markdown"),
+        ]:
+            resource_path = os.path.join(os.path.dirname(__file__), "docs", filename)
+            with open(resource_path, "rb") as resource:
+                st.download_button(label, resource.read(), file_name=filename, mime=mime, key="guide_" + filename)
+        st.caption("Examples are illustrative, not live banking records or generated reports.")
+
     st.header("1. Controlled Master Workbooks")
     if PUBLIC_DEMO:
         st.info("Fictional data only. Do not enter personal or confidential information.")
