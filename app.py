@@ -1,201 +1,260 @@
-import io, hashlib
+﻿import os
+from datetime import datetime, timezone
 import pandas as pd
-import altair as alt
 import streamlit as st
-from exporters import build_steerco_pptx, build_steerco_docx, build_rollover_xlsx
+from governance_engine import (
+    SCHEMA_VERSION, sha256_bytes, parse_workbook, compute_financials,
+    compute_delivery_and_rag, run_bounded_agents, verify_review_gate, execute_safe_rollover
+)
+from exporters import build_full_reporting_pack_zip
 
-st.set_page_config(page_title='Meridian Retail Bank | Executive SteerCo', layout='wide', initial_sidebar_state='collapsed')
+st.set_page_config(page_title="Meridian Retail Bank · Executive Review & SteerCo", layout="wide")
+st.markdown("""<style>
+.block-container {padding-top: 1.2rem; padding-bottom: 1.5rem; max-width: 1180px;}
+.bank-header {background: #0f2438; color: #ffffff; padding: 18px 22px; border-radius: 6px; margin-bottom: 12px;}
+.bank-eyebrow {font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #b8cde0; font-weight: 700;}
+.bank-title {font-size: 23px; font-weight: 700; margin: 4px 0; color: #ffffff;}
+.bank-sub {font-size: 13px; color: #d8e4ef;}
+.status-strip {background: #ffffff; border: 1px solid #d5dde5; border-left: 6px solid #b45309; border-radius: 6px; padding: 12px 16px; margin-bottom: 14px; color: #16212c;}
+.badge-AMBER {background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px; font-weight: 700; font-size: 12px;}
+.badge-RED {background: #fee2e2; color: #991b1b; padding: 2px 8px; border-radius: 4px; font-weight: 700; font-size: 12px;}
+.badge-GREEN {background: #dcfce7; color: #166534; padding: 2px 8px; border-radius: 4px; font-weight: 700; font-size: 12px;}
+.kpi-card {background: #ffffff; border: 1px solid #d5dde5; border-radius: 6px; padding: 13px 15px; color: #16212c;}
+.kpi-lbl {font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #5b6b7c; font-weight: 700;}
+.kpi-val {font-size: 22px; font-weight: 700; margin: 4px 0; color: #0f2438;}
+.kpi-sub {font-size: 12px; color: #5b6b7c;}
+.var-pos {color: #166534; font-weight: 600;}
+.var-neg {color: #991b1b; font-weight: 600;}
+</style>""", unsafe_allow_html=True)
 
-st.markdown('''<style>
-.block-container {padding-top: 2.3rem; padding-bottom: 0.6rem; max-width: 1420px;}
-h1 {font-size: 1.45rem !important; margin-bottom: 0.25rem !important;}
-h4 {font-size: 0.98rem !important; margin-bottom: 0.2rem !important; color: #F8FAFC !important;}
-div[data-testid='stMetric'] {background: #132238; border-left: 4px solid #C59B27; padding: 8px 12px; border-radius: 4px; color: #FFFFFF;}
-.rag-amber {background: #FFF8E7; border-left: 6px solid #D97706; padding: 11px 15px; border-radius: 4px; margin-bottom: 12px; color: #1F2937;}
-.rag-green {background: #ECFDF5; border-left: 6px solid #059669; padding: 11px 15px; border-radius: 4px; margin-bottom: 12px; color: #1F2937;}
-</style>''', unsafe_allow_html=True)
-
-def clean_sheet(file_bytes, sheet_name):
-    xl = pd.ExcelFile(io.BytesIO(file_bytes))
-    if sheet_name not in xl.sheet_names:
-        return pd.DataFrame()
-    df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet_name, header=4)
-    df = df.loc[:, ~df.columns.astype(str).str.startswith('Unnamed:')]
-    return df.dropna(how='all')
-
-def to_excel_bytes(sheets_dict):
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine='openpyxl') as writer:
-        for name, d in sheets_dict.items():
-            d.to_excel(writer, sheet_name=name[:31], index=False)
-    return buf.getvalue()
-
-default_ms = pd.DataFrame([
-    {'ID': 'MS-01', 'Phase': 'Foundations', 'Milestone': 'Programme Charter & Governance Setup', 'Plan Finish': '2026-10-31', 'Forecast Finish': '2026-10-31', 'Status': 'Completed', 'Owner': 'Nora Fisch'},
-    {'ID': 'MS-02', 'Phase': 'Foundations', 'Milestone': 'Core Banking Data Lake Ingestion', 'Plan Finish': '2026-11-30', 'Forecast Finish': '2026-11-30', 'Status': 'On Track', 'Owner': 'Sarah Jenkins'},
-    {'ID': 'MS-03', 'Phase': 'Governance', 'Milestone': 'AI CoE Mandate & DORA Control Catalogue', 'Plan Finish': '2027-03-31', 'Forecast Finish': '2027-03-31', 'Status': 'On Track', 'Owner': 'Marcus Vance'},
-    {'ID': 'MS-04', 'Phase': 'Pilot', 'Milestone': 'Model Validation & Stress-Testing Gate', 'Plan Finish': '2027-06-30', 'Forecast Finish': '2027-07-10', 'Status': 'At Risk (+10d)', 'Owner': 'Dr. Aris Thorne'}
-])
-
-default_chg = pd.DataFrame([
-    {'ID': 'CHG-001', 'Title': 'Add Retail Mortgage FAQ Corpus', 'Owner': 'Elena Rossi', 'Why Raised': 'Baseline knowledge expansion example', 'Cost EUR': 0, 'Schedule': '0d', 'Approval': 'Example Only'},
-    {'ID': 'CHG-002', 'Title': 'Enhanced DORA ICT Incident Logging', 'Owner': 'Marcus Vance', 'Why Raised': 'Regulatory telemetry alignment example', 'Cost EUR': 25000, 'Schedule': '+5d', 'Approval': 'Example Only'},
-    {'ID': 'CHG-003', 'Title': 'Vector Index Partitioning by Business Unit', 'Owner': 'Sarah Jenkins', 'Why Raised': 'GDPR data-segregation isolation example', 'Cost EUR': 40000, 'Schedule': '+7d', 'Approval': 'Example Only'},
-    {'ID': 'CHG-004', 'Title': 'Parallel Model Fallback Routing', 'Owner': 'Dr. Aris Thorne', 'Why Raised': 'MaRisk operational resilience example', 'Cost EUR': 35000, 'Schedule': '0d', 'Approval': 'Example Only'},
-    {'ID': 'CHG-005', 'Title': 'Additional Model Validation & Red-Teaming', 'Owner': 'Nora Fisch', 'Why Raised': 'Pre-pilot stress testing prior to M7 gate', 'Cost EUR': 100000, 'Schedule': '+10d', 'Approval': 'Not approved (Held)'}
-])
-
-default_fin = pd.DataFrame([
-    {'Category': 'Actuals Booked YTD (Oct–Nov)', 'Amount EUR': 545000, 'Envelope Share': '5.45%', 'Status': 'Reconciled in Ledger'},
-    {'Category': 'Remaining Delivery ETC', 'Amount EUR': 8055000, 'Envelope Share': '80.55%', 'Status': 'Forecasted (Oct 2026–Sep 2028)'},
-    {'Category': 'Remaining Risk Reserve', 'Amount EUR': 1500000, 'Envelope Share': '15.00%', 'Status': 'Held inside EUR 10.0M Envelope'},
-    {'Category': 'CHG-05 Unapproved Pressure', 'Amount EUR': 100000, 'Envelope Share': '+1.00%', 'Status': 'Excluded from Committed Baseline'}
-])
-
-default_raid = pd.DataFrame([
-    {'ID': 'RSK-01', 'Type': 'Risk', 'Severity': 'High', 'Title': 'Unapproved CHG-05 lifts EAC to ~EUR 10.1M', 'Owner': 'Nora Fisch', 'Status': 'Open', 'Mitigation': 'Held outside baseline pending SteerCo funding decision.'},
-    {'ID': 'RSK-04', 'Type': 'Risk', 'Severity': 'Medium', 'Title': 'Stale metadata note in Controls!D8 (Month 1 vs Day 2)', 'Owner': 'Data Steward', 'Status': 'Open', 'Mitigation': 'Flagged by Agent 0; blocked from rollover logic.'},
-    {'ID': 'RSK-09', 'Type': 'Risk', 'Severity': 'High', 'Title': 'DORA third-party ICT concentration & exit plan', 'Owner': 'Marcus Vance', 'Status': 'Assessed', 'Mitigation': 'Mandatory evidence gate before M6 sign-off.'},
-    {'ID': 'DEP-03', 'Type': 'Dependency', 'Severity': 'High', 'Title': 'Pilot M7–12 matched baseline evidence for BEN-01', 'Owner': 'Elena Rossi', 'Status': 'Open', 'Mitigation': 'EUR 2.4M/yr cash remains conditional until verified.'}
-])
-
-default_ben = pd.DataFrame([
-    {'ID': 'BEN-01', 'Benefit': 'Net manual effort & cash conversion', 'Owner': 'Nora Fisch / Elena Rossi', 'Target': 'EUR 2.4M/yr (40% touch-time cut)', 'Evidence Gate': 'Pilot M7–12', 'Realised EUR': 0},
-    {'ID': 'BEN-02', 'Benefit': 'External service cost reduction', 'Owner': 'Nora Fisch / Victor Chen', 'Target': 'EUR 2.1M/yr (30% avoidable)', 'Evidence Gate': 'Scale M13–18', 'Realised EUR': 0},
-    {'ID': 'BEN-03', 'Benefit': 'Avoided growth spend', 'Owner': 'Elena Rossi / Cost Owners', 'Target': 'EUR 1.5M/yr (30% avoided)', 'Evidence Gate': 'Scale M13–18', 'Realised EUR': 0},
-    {'ID': 'BEN-04..08', 'Benefit': 'Productivity (+30%), CSAT, Governance & CoE', 'Owner': 'Programme Leads', 'Target': 'Non-cash operational KPIs', 'Evidence Gate': 'M6 / Pilot M7–12', 'Realised EUR': 0}
-])
+CONFIG_VERSION = "BANK-AI-PMO-APP-v2.1"
 
 with st.sidebar:
-    st.header('1. Month-over-Month Workbooks')
-    prev_file = st.file_uploader('Prior Month Baseline (.xlsx)', type=['xlsx'], key='prev')
-    curr_file = st.file_uploader('Current Month Workbook (.xlsx)', type=['xlsx'], key='curr')
-    next_cutoff = st.text_input('Next Month Cutoff', '2026-12-31')
+    st.header("1. Controlled Master Workbooks")
+    curr_up = st.file_uploader("Current Period Workbook (.xlsx) *", type=["xlsx"], key="curr")
+    prev_up = st.file_uploader("Comparison / Prior Workbook (.xlsx)", type=["xlsx"], key="prev")
+    if "run_prev_cmp" not in st.session_state:
+        st.session_state["run_prev_cmp"] = True
+    c_btn1, c_btn2 = st.columns(2)
+    if c_btn1.button("Compare Prior File", type="primary", width="stretch"):
+        st.session_state["run_prev_cmp"] = True
+    if c_btn2.button("Single-File View", width="stretch"):
+        st.session_state["run_prev_cmp"] = False
     st.divider()
-    st.header('2. Mid-Month Controls')
-    chg05_approved = st.checkbox('Simulate CHG-05 Approved & Risks Mitigated (Green RAG)', value=False)
+    st.header("2. Optional LLM Commentary")
+    api_key = st.text_input("Gemini API Key (blank = Deterministic)", type="password")
+    st.divider()
+    st.header("3. Next-Month Rollover Controls")
+    next_cutoff = st.text_input("Next Month Cutoff (YYYY-MM-DD)", "2026-12-31")
+    ev_auth = st.checkbox("Authorise staged event for rollover", value=False)
+    ev_desc = st.text_input("Event description", "")
+    ev_evid = st.text_input("Evidence ID (required if event supplied)", "")
+    ev_rev = st.text_input("Simulated Reviewer Name", "Jithu Nadviledath")
 
-curr_bytes = curr_file.getvalue() if curr_file else None
-prev_bytes = prev_file.getvalue() if prev_file else None
+curr_bytes = curr_up.getvalue() if curr_up else None
+curr_name = curr_up.name if curr_up else None
+prev_bytes = prev_up.getvalue() if prev_up else None
+prev_name = prev_up.name if prev_up else None
 
-if curr_bytes:
-    ms_df = clean_sheet(curr_bytes, 'Milestones')
-    raid_df = clean_sheet(curr_bytes, 'RAID')
-    chg_df = clean_sheet(curr_bytes, 'Changes')
-    ben_df = clean_sheet(curr_bytes, 'Benefits Register')
-    fin_df = clean_sheet(curr_bytes, 'Monthly Finance')
-    chk_df = clean_sheet(curr_bytes, 'Checks')
-else:
-    ms_df, raid_df, chg_df, ben_df, fin_df, chk_df = default_ms.copy(), default_raid.copy(), default_chg.copy(), default_ben.copy(), default_fin.copy(), pd.DataFrame()
+if curr_bytes is None:
+    xlsx_list = sorted([f for f in os.listdir(".") if f.endswith(".xlsx") and "Programme_Data" in f])
+    nov_c = [f for f in xlsx_list if "November" in f or "v0.3" in f]
+    oct_c = [f for f in xlsx_list if "October" in f or "v0.2" in f]
+    pick_c = nov_c[-1] if nov_c else (xlsx_list[-1] if xlsx_list else None)
+    if pick_c:
+        with open(pick_c, "rb") as fh:
+            curr_bytes, curr_name = fh.read(), pick_c
+    if prev_bytes is None and oct_c:
+        with open(oct_c[-1], "rb") as fh:
+            prev_bytes, prev_name = fh.read(), oct_c[-1]
 
-prev_raid_cnt = len(clean_sheet(prev_bytes, 'RAID')) if prev_bytes else 64
-curr_raid_cnt = len(clean_sheet(curr_bytes, 'RAID')) if curr_bytes else 67
+if curr_bytes is None:
+    st.markdown("<div class='bank-header'><div class='bank-eyebrow'>Meridian Retail Bank · Governed AI Transformation</div><div class='bank-title'>Executive Review &amp; Steering Committee Portal</div></div>", unsafe_allow_html=True)
+    st.warning("Upload a valid BANK-AI-PMO-v1 Programme_Data.xlsx workbook in the left sidebar to begin.")
+    st.stop()
 
-if not chg05_approved:
-    rag_status, rag_cls = 'AMBER', 'rag-amber'
-    rag_reasons = [
-        '<strong>Cost (Amber):</strong> Approved budget is EUR 10.00M with EUR 545,000 YTD actuals booked on plan, but unapproved proposal CHG-05 (+EUR 100k) lifts forecast EAC to ~EUR 10.10M.',
-        '<strong>Timelines (Green / Watch):</strong> Foundations milestones MS-01 and MS-02 are on schedule; Pilot Gate MS-04 carries a +10 day validation buffer watch.',
-        '<strong>Risks (Amber):</strong> Active RAID rose from ' + str(prev_raid_cnt) + ' to ' + str(curr_raid_cnt) + ' items, driven by unapproved scope pressure, DORA exit-plan evidence, and stale metadata (Controls!D8).'
-    ]
-else:
-    rag_status, rag_cls = 'GREEN', 'rag-green'
-    rag_reasons = [
-        '<strong>Cost (Green):</strong> Approved budget (EUR 10.00M), YTD actuals (EUR 545k), and forecast EAC (EUR 10.00M) are fully reconciled including the EUR 1.50M risk reserve.',
-        '<strong>Timelines (Green):</strong> Critical path milestones across Foundations (M1–M6) and Pilot readiness (M7–M12) are tracking on schedule with zero slippage.',
-        '<strong>Risks (Green):</strong> All High-severity RAID items have active mitigation owners and DORA, BaFin/MaRisk, GDPR & ECB control evidence verified.'
-    ]
+wb_hash = sha256_bytes(curr_bytes)
+sheets, controls, val_rep = parse_workbook(curr_bytes)
+if not val_rep.is_valid:
+    st.error("BLOCKING SCHEMA / RECONCILIATION ERRORS — Finalisation halted:")
+    for err in val_rep.blocking_errors:
+        st.write(f"- {err}")
+    st.stop()
 
-h1, h2 = st.columns([3.3, 1.2])
-h1.title('MERIDIAN RETAIL BANK — STEERING COMMITTEE & AI GOVERNANCE')
-st.markdown(f"<div class='{rag_cls}'><strong>OVERALL PORTFOLIO RAG STATUS: {rag_status}</strong><br>{'<br>'.join(rag_reasons)}</div>", unsafe_allow_html=True)
+prev_sheets, prev_controls = None, None
+if prev_bytes is not None and st.session_state.get("run_prev_cmp", True):
+    ps, pc, pr = parse_workbook(prev_bytes)
+    if not pr.is_valid:
+        st.error(f"PRIOR WORKBOOK VALIDATION FAILED ? Comparison stopped: {'; '.join(pr.blocking_errors)}. Fix the file or click Single-File View in the sidebar.")
+    if pc.get("Simulation cutoff", "") >= controls.get("Simulation cutoff", ""):
+        st.error(f"COMPARISON ORDER ERROR ? Prior cutoff ({pc.get('Simulation cutoff')}) must be earlier than current cutoff ({controls.get('Simulation cutoff')}). Comparison stopped.")
+        st.stop()
+    prev_sheets, prev_controls = ps, pc
 
-m1, m2, m3, m4 = st.columns(4)
-m1.metric('Approved Budget: EUR 10.00M', 'EUR 545k YTD', 'EAC: EUR 10.10M (+EUR 100k Held)' if not chg05_approved else 'Forecast EAC: EUR 10.00M (On Budget)', delta_color='inverse' if not chg05_approved else 'normal')
-m2.metric('Timelines & Milestones', '92% On Track' if not chg05_approved else '100% On Track', '11 On Plan | 1 Buffer Watch (+10d)' if not chg05_approved else 'All Milestones On Plan', delta_color='off')
-m3.metric('Active Risks & RAID', f'{curr_raid_cnt} Items', f'{curr_raid_cnt - prev_raid_cnt:+d} vs Prior Month', delta_color='inverse' if curr_raid_cnt > prev_raid_cnt else 'normal')
-m4.metric('Realised Cash Benefits', 'EUR 0', 'EUR 6.0M/yr Conditional (Pilot M7–12)', delta_color='off')
+fin = compute_financials(sheets, controls, prev_sheets=prev_sheets)
+deliv = compute_delivery_and_rag(sheets, fin, val_rep)
+agent_out = run_bounded_agents(sheets, controls, fin, deliv, val_rep, api_key=api_key)
 
-def make_donut(df_chart):
-    return alt.Chart(df_chart).mark_arc(innerRadius=40, outerRadius=76).encode(
-        theta=alt.Theta(field='Value', type='quantitative'),
-        color=alt.Color(field='Category', type='nominal', scale=alt.Scale(range=['#38BDF8', '#F59E0B', '#64748B', '#EF4444']), legend=alt.Legend(orient='bottom', columns=1, labelLimit=250, title=None)),
-        tooltip=['Category', 'Label']
-    ).properties(height=290)
+if "reviews" not in st.session_state:
+    st.session_state["reviews"] = {}
+review_gates = {k: verify_review_gate(k, v["content_hash"], wb_hash, fin["cutoff"], CONFIG_VERSION, st.session_state["reviews"].get(k)) for k, v in agent_out["sections"].items()}
+all_accepted = all(g["accepted"] for g in review_gates.values())
+overall_review_label = "Simulated Owner-Acknowledged Pack" if all_accepted else "Draft · Pending Section Review"
+comp_label = f"{prev_controls.get('Simulation cutoff')} ({prev_name})" if prev_controls else "Current workbook baseline (no prior file uploaded)"
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    '1. SteerCo One-Pager',
-    '2. Financials & MoM Variance',
-    '3. Milestones & Change Control',
-    '4. Risks & Governance (RAID)',
-    '5. Benefits & Next-Month Rollover'
+st.markdown(f"<div class='bank-header'><div class='bank-eyebrow'>Meridian Retail Bank · Governed AI Transformation · {overall_review_label}</div><div class='bank-title'>Executive Review &amp; Steering Committee Pack</div><div class='bank-sub'>Master Source: {curr_name} &nbsp;|&nbsp; Cutoff: {fin['cutoff']} &nbsp;|&nbsp; Run: {controls.get('Last simulation run')} &nbsp;|&nbsp; Envelope Authority: {fin['authority_status']}</div></div>", unsafe_allow_html=True)
+
+tab_exec, tab_rev, tab_cost, tab_ms, tab_raid, tab_roll = st.tabs([
+    "1. Executive Review",
+    "2. Five-Role Workflow & Review Gate",
+    "3. Cost & Variance Ledger",
+    "4. Milestones & Change Control",
+    "5. RAID, Conflicts & Benefits",
+    "6. Next-Month Rollover & Exports"
 ])
 
-with tab1:
-    p1, p2, p3 = st.columns(3)
-    with p1:
-        st.markdown('#### 1. Cost & Envelope (EUR 10.0M Budget)')
-        st.altair_chart(make_donut(pd.DataFrame([{'Category': 'YTD Actuals Booked (EUR 0.55M)', 'Value': 0.545, 'Label': 'EUR 545,000'}, {'Category': 'Remaining ETC (EUR 8.06M)', 'Value': 8.055, 'Label': 'EUR 8,055,000'}, {'Category': 'Risk Reserve (EUR 1.50M)', 'Value': 1.500, 'Label': 'EUR 1,500,000'}])), width='stretch')
-        with st.expander('📋 Click for Cost & Ledger Details'):
-            st.dataframe(fin_df, width='stretch', height=180)
-    with p2:
-        st.markdown('#### 2. Timelines & Milestones (12 Total)')
-        st.altair_chart(make_donut(pd.DataFrame([{'Category': 'Completed (3)', 'Value': 3, 'Label': '3 Milestones Done'}, {'Category': 'On Track (8)', 'Value': 8, 'Label': '8 Milestones On Plan'}, {'Category': 'Buffer Watch / At Risk (1)', 'Value': 1, 'Label': 'MS-04 (+10d Watch)'}])), width='stretch')
-        with st.expander('📋 Click for Milestone Schedule Details'):
-            st.dataframe(ms_df, width='stretch', height=180)
-    with p3:
-        st.markdown(f'#### 3. Risks & RAID Profile ({curr_raid_cnt} Items)')
-        st.altair_chart(make_donut(pd.DataFrame([{'Category': 'High Severity (11)', 'Value': 11, 'Label': '11 High-Severity Items'}, {'Category': 'Medium Severity (34)', 'Value': 34, 'Label': '34 Medium-Severity Items'}, {'Category': 'Low / Closed (22)', 'Value': 22, 'Label': '22 Low / Closed Items'}])), width='stretch')
-        with st.expander('📋 Click for Key Risks & Mitigations'):
-            st.dataframe(raid_df.head(10), width='stretch', height=180)
+with tab_exec:
+    perf_cls = "badge-GREEN" if deliv["performance_rag"] == "GREEN" else ("badge-RED" if deliv["performance_rag"] == "RED" else "badge-AMBER")
+    gate_cls = "badge-GREEN" if "GREEN" in deliv["gate_readiness_rag"] else "badge-RED"
+    st.markdown(f"<div class='status-strip'><div style='display:flex; flex-wrap:wrap; gap:18px; justify-content:space-between; margin-bottom:8px;'><div><strong>Reporting Month:</strong> {fin['period_ym']} (Cutoff {fin['cutoff']})</div><div><strong>Comparison Baseline:</strong> {comp_label}</div><div><strong>Overall Programme RAG:</strong> <span class='{perf_cls}'>{deliv['performance_rag']}</span></div><div><strong>Release Readiness:</strong> <span class='{gate_cls}'>{deliv['gate_readiness_rag']}</span></div></div><div style='margin-bottom:4px;'><strong>Primary Driver:</strong> {deliv['primary_driver']}</div><div style='margin-bottom:4px;'><strong>Immediate Action:</strong> {deliv['immediate_action']}</div><div style='font-size:11.5px; color:#5b6b7c;'><em>RAG Rule Basis: {deliv['rag_rule_basis']}</em></div></div>", unsafe_allow_html=True)
+
+    prior_fcst = fin["prior_forecast_for_curr_month_eur"]
+    prior_fcst_disp = f"€{prior_fcst:,.2f}" if prior_fcst is not None else f"€{fin['curr_month_baseline_eur']:,.2f} (Baseline)"
+    var_eur, var_pct = fin["period_variance_eur"], fin["period_variance_pct"]
+    var_dir = "below forecast" if var_eur < 0 else ("above forecast" if var_eur > 0 else "on forecast")
+    var_cls = "var-pos" if var_eur <= 0 else "var-neg"
+    prior_eac_txt = f"Unchanged vs prior EAC (€{fin['prior_eac_eur']/1e6:.2f}M)" if (fin["prior_eac_eur"] is not None and abs(fin["eac_eur"] - fin["prior_eac_eur"]) < 0.01) else (f"Prior EAC: €{fin['prior_eac_eur']/1e6:.2f}M" if fin["prior_eac_eur"] is not None else "Single-period view")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(f"<div class='kpi-card'><div class='kpi-lbl'>Current-Month Actual ({fin['period_ym']})</div><div class='kpi-val'>€{fin['curr_month_actual_eur']:,.2f}</div><div class='kpi-sub'>Reconciled to Cost Ledger · Cum. €{fin['cum_actual_eur']:,.0f}</div></div>", unsafe_allow_html=True)
+    c2.markdown(f"<div class='kpi-card'><div class='kpi-lbl'>Prior Forecast for {fin['period_ym']}</div><div class='kpi-val'>{prior_fcst_disp}</div><div class='kpi-sub'>Plan baseline: €{fin['curr_month_baseline_eur']:,.2f}</div></div>", unsafe_allow_html=True)
+    c3.markdown(f"<div class='kpi-card'><div class='kpi-lbl'>Period Variance ({fin['period_ym']})</div><div class='kpi-val {var_cls}'>€{abs(var_eur):,.2f} {var_dir}</div><div class='kpi-sub'>{var_pct:+.2f}% vs prior forecast</div></div>", unsafe_allow_html=True)
+    c4.markdown(f"<div class='kpi-card'><div class='kpi-lbl'>Expected Final Cost (EAC)</div><div class='kpi-val'>€{fin['eac_eur']/1e6:.2f}M</div><div class='kpi-sub'>{prior_eac_txt} · €{fin['eac_vs_envelope_eur']:+,.0f} vs €{fin['envelope_eur']/1e6:.1f}M envelope ({fin['authority_status']})</div></div>", unsafe_allow_html=True)
+
+    st.write("")
+    v_left, v_right = st.columns([1.45, 1.0])
+    with v_left:
+        st.subheader("3. Explain the Variance & Change Control Position")
+        if fin["rephased_only"]:
+            what_moved = f"€{abs(var_eur):,.2f} ({abs(var_pct):.2f}%) lower actual spend in {fin['period_ym']} (€{fin['curr_month_actual_eur']:,.2f} vs €{prior_fcst:,.2f} prior forecast), matched by an equal +€{abs(var_eur):,.2f} increase in subsequent monthly forecast."
+            why_moved = "Spend moved to later months; underlying cause and recurrence unconfirmed. Do not treat rephasing as a saving."
+            recurrence_txt = "Unconfirmed (rephased across periods; total EAC unchanged at €10.10M)."
+        else:
+            what_moved = f"€{abs(var_eur):,.2f} ({var_pct:+.2f}%) variance in {fin['period_ym']} against comparison forecast."
+            why_moved = "Variance reflects actual ledger bookings vs prior forecast; underlying operational driver requires cost-owner confirmation."
+            recurrence_txt = "Unconfirmed — awaiting cost-owner classification."
+        st.markdown(f"- **1. What moved:** {what_moved}\n- **2. Why it moved:** {why_moved}\n- **3. Will it recur:** {recurrence_txt}\n- **4. What Finance should do next:** Confirm subsequent monthly phasing with Elena Rossi and Leo Martin; escalate €100k whole-programme EAC pressure (CHG-005) to F02/F01.")
+        if fin["live_crs"]:
+            st.markdown("**Existing Live Change Requests (No Automatic Creation or Approval):**")
+            st.dataframe(pd.DataFrame(fin["live_crs"])[["ID", "Type", "Title", "Owner", "Incremental delivery EUR", "Status", "Approval"]], width="stretch", hide_index=True)
+
+    with v_right:
+        st.subheader("Cost Owner Variance Note (Draft)")
+        with st.form("cost_owner_note_form"):
+            co_cause = st.text_input("Cause", value="Supplier/platform onboarding rephased to next month")
+            co_rec = st.selectbox("Recurrence Classification", ["Unconfirmed", "One-off", "Recurring"])
+            co_evid = st.text_input("Evidence Reference", value="SIM-COST-02 / Monthly Finance")
+            co_act = st.text_input("Proposed Finance Action", value="Monitor next-month actuals before releasing deferred ETC")
+            if st.form_submit_button("Save Cost Owner Note (Draft)"):
+                st.session_state["cost_owner_note"] = {"cause": co_cause, "recurrence": co_rec, "evidence": co_evid, "action": co_act}
+        saved_note = st.session_state.get("cost_owner_note")
+        if saved_note:
+            st.warning(f"**DRAFT NOTE (Not Formally Reviewed):** Cause: {saved_note['cause']} | Recurrence: **{saved_note['recurrence']}** | Evidence: `{saved_note['evidence']}` | Action: {saved_note['action']}")
+            if saved_note["recurrence"] == "Recurring":
+                st.error("Recurring Impact Assessment: Alters remaining ETC and EAC beyond Daniel Weber's €100k monthly reallocation threshold (DR03); formal F02/F01 change governance required.")
 
     st.divider()
-    b1, b2, b3 = st.columns(3)
-    with b1:
-        with st.expander('📋 Click to View Milestones Details (12 Total)'):
-            st.dataframe(ms_df, width='stretch', height=220)
-    with b2:
-        with st.expander('📋 Click to View Change Requests Details (5 Total)'):
-            st.dataframe(chg_df, width='stretch', height=220)
-    with b3:
-        with st.expander('📋 Click to View Benefits Register Details (EUR 6.0M/yr)'):
-            st.dataframe(ben_df, width='stretch', height=220)
+    st.subheader("4. Immediate Milestones (Next Two Unfinished Gates)")
+    ms_cols = ["ID", "Phase", "Plan", "Forecast", "Combined Status", "Blocker", "Next Action", "Owner", "Due"]
+    st.dataframe(pd.DataFrame(deliv["unfinished_milestones"][:2], columns=ms_cols), width="stretch", hide_index=True)
 
-    meta = {'schema': 'BANK-AI-PMO-v1', 'cutoff': '2026-11-30', 'run_id': 'RUN-000003'}
-    kpis = [('Approved Budget', 'EUR 10.00M', 'EUR 545k YTD'), ('Timelines', '92% On Track', '11 On Plan | 1 Watch'), ('Active RAID', f'{curr_raid_cnt} Items', f'{curr_raid_cnt - prev_raid_cnt:+d} MoM'), ('Realised Cash', 'EUR 0', 'EUR 6.0M/yr Conditional')]
-    approved_by_domain = {'Cost & Finance': ['- Approved budget EUR 10.00M; YTD actuals EUR 545,000 (+EUR 225k MoM); EAC ~EUR 10.10M incl. EUR 1.50M risk reserve.'], 'Timelines & CRs': ['- Foundations on track; CHG-05 (EUR 100k / +10d) held as Not Approved pending SteerCo decision.'], 'Risks & Benefits': ['- 67 RAID items tracked; EUR 6.0M/yr benefits gated until Pilot M7–12 ledger observations.']}
-    signoffs = {'Cost & Finance': True, 'Timelines & CRs': True, 'Risks & Benefits': True}
-    pptx_data = build_steerco_pptx(meta, kpis, approved_by_domain, signoffs, [r.replace('<strong>', '').replace('</strong>', '') for r in rag_reasons])
-    h2.download_button('Export Boardroom Deck (.pptx)', pptx_data, 'Meridian_SteerCo_Deck.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', type='primary', width='stretch')
+    st.subheader("5. Priority Risks & Issues (Top 3 Exceptions)")
+    if deliv["overdue_actions"]:
+        st.caption(f"Overdue Open Actions as of {fin['cutoff']}: " + ", ".join([f"{a['ID']} ({a['Owner']}, due {a['Due']})" for a in deliv["overdue_actions"]]))
+    exc_cols = ["Record Type", "IDs", "Severity", "Title & Driving Evidence", "Impact", "Action", "Owner", "Due Date"]
+    st.dataframe(pd.DataFrame(deliv["top_exceptions"], columns=exc_cols), width="stretch", hide_index=True)
 
-with tab2:
-    st.subheader('Month-over-Month Health Delta & Cost Ledger')
-    st.table(pd.DataFrame([
-        {'Pillar': 'Cost (Budget vs YTD Actuals)', 'Prior Month (Oct)': 'EUR 320k YTD / EUR 10.00M EAC', 'Current Month (Nov)': 'EUR 545k YTD / EUR 10.10M EAC', 'Trend': 'Amber (+EUR 100k unapproved CHG-05 pressure)'},
-        {'Pillar': 'Timelines', 'Prior Month (Oct)': '100% On Plan', 'Current Month (Nov)': '92% On Plan', 'Trend': 'Green/Watch (MS-04 +10d validation buffer)'},
-        {'Pillar': 'Risks (RAID)', 'Prior Month (Oct)': f'{prev_raid_cnt} items', 'Current Month (Nov)': f'{curr_raid_cnt} items', 'Trend': f'Amber ({curr_raid_cnt - prev_raid_cnt:+d} new items logged)'}
-    ]))
-    st.dataframe(fin_df, width='stretch', height=240)
+with tab_rev:
+    st.subheader("Five-Role Operating Model & Section-Level Human Review Gate")
+    st.info("Orchestrator coordinates run & cutoff; Agent 0 is sole writer; PMO, BA and Governance are read-only. Reviewer entries are **simulated acknowledgements** bound to the workbook SHA-256 hash and cutoff.")
+    for sec_key, sec_data in agent_out["sections"].items():
+        g = review_gates[sec_key]
+        with st.container(border=True):
+            ca, cb = st.columns([2.2, 1.3])
+            with ca:
+                st.markdown(f"**{sec_data['title']}** (`{sec_data['mode']}`)")
+                for b in sec_data["bullets"]:
+                    st.write(f"- {b}")
+                st.caption(f"Gate Status: **{g['status']}**")
+            with cb:
+                r_name = st.text_input("Simulated Reviewer", value="Owner Name", key=f"rev_{sec_key}")
+                r_out = st.selectbox("Outcome", ["Pending", "Approved", "Changes Requested", "Rejected"], key=f"out_{sec_key}")
+                r_com = st.text_input("Review Note", key=f"com_{sec_key}")
+                if st.button("Record Simulated Review", key=f"btn_{sec_key}"):
+                    st.session_state["reviews"][sec_key] = {"reviewer": f"{r_name} (Simulated Acknowledgement)", "outcome": r_out, "comments": r_com, "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"), "workbook_hash": wb_hash, "cutoff": fin["cutoff"], "section_hash": sec_data["content_hash"], "config_version": CONFIG_VERSION}
+                    st.rerun()
 
-with tab3:
-    st.subheader('Milestones & Change Control Database')
-    st.dataframe(ms_df, width='stretch', height=210)
-    st.dataframe(chg_df, width='stretch', height=250)
+with tab_cost:
+    st.subheader("Monthly Finance & Cost Ledger Reconciliation")
+    mf_disp = sheets["Monthly Finance"].copy()
+    for col in ["Baseline EUR", "Actual EUR", "Forecast EUR", "Variance EUR"]:
+        if col in mf_disp.columns:
+            mf_disp[col] = pd.to_numeric(mf_disp[col], errors="coerce").round(2)
+    if prev_sheets and "Monthly Finance" in prev_sheets:
+        pmf_map = prev_sheets["Monthly Finance"].set_index("Month")["Forecast EUR"].apply(lambda x: round(float(x), 2) if pd.notna(x) else None).to_dict()
+        for idx, row in mf_disp.iterrows():
+            m_key = row["Month"]
+            if pd.notna(row["Actual EUR"]) and m_key in pmf_map and pmf_map[m_key] is not None:
+                mf_disp.at[idx, "Forecast EUR"] = pmf_map[m_key]
+    mf_disp["Variance EUR"] = (mf_disp["Actual EUR"] - mf_disp["Forecast EUR"]).round(2)
+    mf_disp["Variance %"] = ((mf_disp["Variance EUR"] / mf_disp["Forecast EUR"]) * 100.0).round(2)
+    cols_order = [c for c in ["Month", "Baseline EUR", "Forecast EUR", "Actual EUR", "Variance EUR", "Variance %", "Evidence status"] if c in mf_disp.columns]
+    st.dataframe(mf_disp[cols_order], width="stretch", height=280, hide_index=True)
+    st.markdown("**Cost Ledger (Bookings, Accruals & Commitments):**")
+    st.dataframe(sheets["Cost Ledger"], width="stretch", height=240, hide_index=True)
 
-with tab4:
-    st.subheader('Risks & Governance Register (RAID)')
-    if not chk_df.empty:
-        st.dataframe(chk_df, width='stretch', height=190)
-    st.dataframe(raid_df.head(30), width='stretch', height=280)
+with tab_ms:
+    st.subheader("Milestones, Change Control & Backlog")
+    st.dataframe(sheets["Milestones"], width="stretch", height=180)
+    st.dataframe(sheets["Changes"], width="stretch", height=200)
+    st.dataframe(sheets["Backlog"], width="stretch", height=240)
 
-with tab5:
-    st.subheader('Benefits Register & Next-Month Workbook Rollover')
-    cx, cy = st.columns(2)
-    docx_data = build_steerco_docx(meta, kpis, approved_by_domain, signoffs, [r.replace('<strong>', '').replace('</strong>', '') for r in rag_reasons])
-    cx.download_button('Download Executive Word Brief (.docx)', docx_data, 'Meridian_SteerCo_Brief.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', width='stretch')
-    if curr_bytes:
-        xlsx_data = build_rollover_xlsx(curr_bytes, meta['run_id'], next_cutoff, rag_reasons)
-        cy.download_button(f'Download Next-Month Master Workbook ({next_cutoff}.xlsx)', xlsx_data, f'Programme_Data_{next_cutoff}.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', width='stretch')
-    else:
-        cy.download_button('Download Full Excel Database (.xlsx)', to_excel_bytes({'Cost_Ledger': fin_df, 'Milestones': ms_df, 'Change_Requests': chg_df, 'RAID': raid_df, 'Benefits': ben_df}), 'Meridian_Programme_Database.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', width='stretch')
-    st.dataframe(ben_df, width='stretch', height=260)
+with tab_raid:
+    st.subheader("RAID Register, Source Conflicts, Benefits & Checks")
+    if val_rep.warnings:
+        for w in val_rep.warnings:
+            st.warning(w)
+    st.dataframe(pd.DataFrame(val_rep.checks_summary), width="stretch", height=210)
+    st.dataframe(sheets["Conflicts"], width="stretch", height=200)
+    st.dataframe(sheets["Benefits Register"], width="stretch", height=220)
+
+meta = {"schema": SCHEMA_VERSION, "cutoff": fin["cutoff"], "run_id": controls.get("Last simulation run", "RUN-UNKNOWN"), "wb_hash": wb_hash, "overall_review_label": overall_review_label}
+
+with tab_roll:
+    st.subheader("Safe Next-Month Rollover & Complete 10-Artefact Reporting Pack")
+    rollover_bytes, rollover_name, receipt = None, None, None
+    staged_events = [{"authorized": ev_auth, "description": ev_desc, "evidence_id": ev_evid, "reviewer": ev_rev}] if ev_desc.strip() else []
+    try:
+        rollover_bytes, receipt = execute_safe_rollover(curr_bytes, next_cutoff, staged_events, CONFIG_VERSION)
+        rollover_name = f"Programme_Data_{next_cutoff}.xlsx"
+        st.success(f"Next-month rollover verified ({fin['cutoff']} -> {next_cutoff}) | Output SHA-256: `{receipt['output_sha256'][:16]}`")
+    except Exception as e:
+        st.error(f"Rollover blocked: {e}")
+
+    zip_bytes, file_map = build_full_reporting_pack_zip(meta, sheets, fin, deliv, agent_out, review_gates, rollover_bytes, rollover_name)
+    st.download_button("📦 Download Complete Reporting Pack (.zip)", zip_bytes, f"Meridian_Reporting_Pack_{fin['period_ym']}.zip", "application/zip", type="primary", width="stretch")
+
+    d1, d2, d3 = st.columns(3)
+    with d1:
+        st.download_button("1. Monthly Status Report (.docx)", file_map[f"01_Monthly_Status_Report_{fin['period_ym']}.docx"], f"01_Monthly_Status_Report_{fin['period_ym']}.docx", width="stretch")
+        st.download_button("2. Steering Committee Deck (.pptx)", file_map[f"02_SteerCo_Deck_{fin['period_ym']}.pptx"], f"02_SteerCo_Deck_{fin['period_ym']}.pptx", width="stretch")
+        st.download_button("3. RAID Register (.xlsx)", file_map[f"03_RAID_Register_{fin['period_ym']}.xlsx"], f"03_RAID_Register_{fin['period_ym']}.xlsx", width="stretch")
+    with d2:
+        st.download_button("4. Cost Analysis Workbook (.xlsx)", file_map[f"04_Cost_Analysis_{fin['period_ym']}.xlsx"], f"04_Cost_Analysis_{fin['period_ym']}.xlsx", width="stretch")
+        st.download_button("5. Benefits Analysis (.xlsx)", file_map[f"05_Benefits_Analysis_{fin['period_ym']}.xlsx"], f"05_Benefits_Analysis_{fin['period_ym']}.xlsx", width="stretch")
+        st.download_button("6. Backlog Review (.xlsx)", file_map[f"06_Backlog_Review_{fin['period_ym']}.xlsx"], f"06_Backlog_Review_{fin['period_ym']}.xlsx", width="stretch")
+    with d3:
+        st.download_button("7. Monthly Change Summary (.docx)", file_map[f"07_Change_Summary_{fin['period_ym']}.docx"], f"07_Change_Summary_{fin['period_ym']}.docx", width="stretch")
+        st.download_button("8. Five Role Outputs (.json)", file_map[f"08_Role_Outputs_{fin['period_ym']}.json"], f"08_Role_Outputs_{fin['period_ym']}.json", width="stretch")
+        if rollover_bytes and rollover_name:
+            st.download_button(f"9. Next-Month Workbook ({rollover_name})", rollover_bytes, rollover_name, width="stretch")
