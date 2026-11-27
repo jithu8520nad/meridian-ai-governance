@@ -1,4 +1,7 @@
 ﻿import os
+import json
+from record_review import render_review, load_history, unresolved_items, render_closure
+import sqlite3
 from datetime import datetime, timezone
 import pandas as pd
 import streamlit as st
@@ -27,12 +30,30 @@ st.markdown("""<style>
 .var-neg {color: #991b1b; font-weight: 600;}
 </style>""", unsafe_allow_html=True)
 
-CONFIG_VERSION = "BANK-AI-PMO-APP-v2.1"
+CONFIG_VERSION = "BANK-AI-PMO-APP-v2.2"
+
+PUBLIC_DEMO = os.environ.get("MERIDIAN_PUBLIC_DEMO", "1") == "1"
+if PUBLIC_DEMO:
+    os.environ["MERIDIAN_PUBLIC_DEMO"] = "1"
 
 with st.sidebar:
+    with st.expander("User Guide & Sample Deliverables", expanded=False):
+        st.caption("Learn the workflow and explore illustrative PM / PMO examples.")
+        for label, filename, mime in [
+            ("Download SOP", "USER_GUIDE.md", "text/markdown"),
+            ("Download sample finance exception", "SAMPLE_EXCEPTION.csv", "text/csv"),
+            ("Download sample SteerCo brief", "SAMPLE_STEERCO_BRIEF.md", "text/markdown"),
+        ]:
+            resource_path = os.path.join(os.path.dirname(__file__), "docs", filename)
+            with open(resource_path, "rb") as resource:
+                st.download_button(label, resource.read(), file_name=filename, mime=mime, key="guide_" + filename)
+        st.caption("Examples are illustrative, not live banking records or generated reports.")
+
     st.header("1. Controlled Master Workbooks")
-    curr_up = st.file_uploader("Current Period Workbook (.xlsx) *", type=["xlsx"], key="curr")
-    prev_up = st.file_uploader("Comparison / Prior Workbook (.xlsx)", type=["xlsx"], key="prev")
+    if PUBLIC_DEMO:
+        st.info("Fictional data only. Do not enter personal or confidential information.")
+    curr_up = None if PUBLIC_DEMO else st.file_uploader("Current Period Workbook (.xlsx) *", type=["xlsx"], key="curr")
+    prev_up = None if PUBLIC_DEMO else st.file_uploader("Comparison / Prior Workbook (.xlsx)", type=["xlsx"], key="prev")
     if "run_prev_cmp" not in st.session_state:
         st.session_state["run_prev_cmp"] = True
     c_btn1, c_btn2 = st.columns(2)
@@ -42,14 +63,14 @@ with st.sidebar:
         st.session_state["run_prev_cmp"] = False
     st.divider()
     st.header("2. Optional LLM Commentary")
-    api_key = st.text_input("Gemini API Key (blank = Deterministic)", type="password")
+    api_key = "" if PUBLIC_DEMO else st.text_input("Gemini API Key (blank = Deterministic)", type="password")
     st.divider()
     st.header("3. Next-Month Rollover Controls")
     next_cutoff = st.text_input("Next Month Cutoff (YYYY-MM-DD)", "2026-12-31")
     ev_auth = st.checkbox("Authorise staged event for rollover", value=False)
     ev_desc = st.text_input("Event description", "")
     ev_evid = st.text_input("Evidence ID (required if event supplied)", "")
-    ev_rev = st.text_input("Simulated Reviewer Name", "Jithu Nadviledath")
+    ev_rev = st.text_input("Simulated Reviewer Name", "Demo Reviewer")
 
 curr_bytes = curr_up.getvalue() if curr_up else None
 curr_name = curr_up.name if curr_up else None
@@ -98,7 +119,31 @@ agent_out = run_bounded_agents(sheets, controls, fin, deliv, val_rep, api_key=ap
 if "reviews" not in st.session_state:
     st.session_state["reviews"] = {}
 review_gates = {k: verify_review_gate(k, v["content_hash"], wb_hash, fin["cutoff"], CONFIG_VERSION, st.session_state["reviews"].get(k)) for k, v in agent_out["sections"].items()}
+context = sha256_bytes(json.dumps([wb_hash, sha256_bytes(prev_bytes) if prev_sheets is not None else None,
+                                   fin["cutoff"], CONFIG_VERSION]).encode())
+try:
+    history = load_history()
+except (sqlite3.Error, OSError, ValueError):
+    st.error("Review storage unavailable. Reporting is blocked.")
+    st.stop()
+st.session_state["record_review_history"] = history
+exceptions = unresolved_items(history)
+for item in exceptions:
+    for section in item["affected_sections"]:
+        if section in review_gates:
+            st.session_state["reviews"].pop(section, None)
+            review_gates[section] = {"accepted": False, "status": "BLOCKED BY RECORD EXCEPTION",
+                                     "reason": "Resolve or correct disputed source data before sign-off."}
+if exceptions:
+    st.warning(f"{len(exceptions)} open record exception(s). Affected figures are provisional; exports are held.")
 all_accepted = all(g["accepted"] for g in review_gates.values())
+
+def review_panel(key, *names, extra=None):
+    sources = {name: json.loads(sheets[name].to_json(orient="records", date_format="iso"))
+               for name in names if name in sheets}
+    sources.update(extra or {})
+    render_review(st, sources, history, wb_hash, context, key)
+
 overall_review_label = "Simulated Owner-Acknowledged Pack" if all_accepted else "Draft · Pending Section Review"
 comp_label = f"{prev_controls.get('Simulation cutoff')} ({prev_name})" if prev_controls else "Current workbook baseline (no prior file uploaded)"
 
@@ -190,12 +235,13 @@ with tab_rev:
                 r_name = st.text_input("Simulated Reviewer", value="Owner Name", key=f"rev_{sec_key}")
                 r_out = st.selectbox("Outcome", ["Pending", "Approved", "Changes Requested", "Rejected"], key=f"out_{sec_key}")
                 r_com = st.text_input("Review Note", key=f"com_{sec_key}")
-                if st.button("Record Simulated Review", key=f"btn_{sec_key}"):
+                if st.button("Record Simulated Review", key=f"btn_{sec_key}", disabled=any(sec_key in x["affected_sections"] for x in exceptions)):
                     st.session_state["reviews"][sec_key] = {"reviewer": f"{r_name} (Simulated Acknowledgement)", "outcome": r_out, "comments": r_com, "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"), "workbook_hash": wb_hash, "cutoff": fin["cutoff"], "section_hash": sec_data["content_hash"], "config_version": CONFIG_VERSION}
                     st.rerun()
 
 with tab_cost:
     st.subheader("Monthly Finance & Cost Ledger Reconciliation")
+    review_panel("cost", "Monthly Finance", "Cost Ledger")
     mf_disp = sheets["Monthly Finance"].copy()
     for col in ["Baseline EUR", "Actual EUR", "Forecast EUR", "Variance EUR"]:
         if col in mf_disp.columns:
@@ -215,12 +261,17 @@ with tab_cost:
 
 with tab_ms:
     st.subheader("Milestones, Change Control & Backlog")
+    review_panel("delivery", "Milestones", "Changes", "Change Details", "Backlog")
     st.dataframe(sheets["Milestones"], width="stretch", height=180)
     st.dataframe(sheets["Changes"], width="stretch", height=200)
     st.dataframe(sheets["Backlog"], width="stretch", height=240)
 
 with tab_raid:
     st.subheader("RAID Register, Source Conflicts, Benefits & Checks")
+    st.dataframe(sheets["RAID"], width="stretch", height=220)
+    review_panel("controls", "RAID", "Conflicts", "Benefits Register", "Benefit Observations",
+                 extra={"Checks": val_rep.checks_summary,
+                        "Controls": [{"Finding": warning} for warning in val_rep.warnings]})
     if val_rep.warnings:
         for w in val_rep.warnings:
             st.warning(w)
@@ -231,7 +282,23 @@ with tab_raid:
 meta = {"schema": SCHEMA_VERSION, "cutoff": fin["cutoff"], "run_id": controls.get("Last simulation run", "RUN-UNKNOWN"), "wb_hash": wb_hash, "overall_review_label": overall_review_label}
 
 with tab_roll:
-    st.subheader("Safe Next-Month Rollover & Complete 10-Artefact Reporting Pack")
+    st.subheader("Safe Next-Month Rollover & Complete Reporting Pack (up to 9 artefacts)")
+    st.markdown("### Shared exceptions queue")
+    st.caption("Demo: exceptions persist within your visitor session only. Closure requires documented evidence." if __import__("os").environ.get("MERIDIAN_PUBLIC_DEMO") == "1" else "Exceptions persist across sessions and workbook versions on this server. Closure requires documented evidence.")
+    staged = {"Next cutoff": next_cutoff, "Event": ev_desc, "Evidence": ev_evid, "Staged": ev_auth}
+    review_panel("rollover", extra={"Rollover": [staged]})
+    render_closure(st, exceptions, wb_hash, context)
+    if history:
+        st.download_button("Download record review history", json.dumps(history, indent=2),
+                           "Meridian_Record_Review_History.json", "application/json")
+    if exceptions:
+        st.dataframe([{ "Source": x["sheet"], "Record": str(x["record"]), "Decision": x["outcome"],
+                        "Reason": x["reason"], "Owner": x["owner"], "Due": x["due"],
+                        "Sections": ", ".join(x["affected_sections"])} for x in exceptions],
+                     hide_index=True)
+        st.warning("Reporting pack and rollover exports are held until the open exceptions are resolved.")
+        st.stop()
+    st.caption("No open reviewer exceptions for these inputs.")
     rollover_bytes, rollover_name, receipt = None, None, None
     staged_events = [{"authorized": ev_auth, "description": ev_desc, "evidence_id": ev_evid, "reviewer": ev_rev}] if ev_desc.strip() else []
     try:

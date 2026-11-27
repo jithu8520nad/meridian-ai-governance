@@ -1,0 +1,2 @@
+scenario,period,amount_eur,outcome,reason,owner,due_date,closure_evidence
+Illustrative finance review,2026-11,295000,Reject,Actual expenditure requires reconciliation,Finance Team,2026-12-04,UAT-FIN-001 simulated controller acceptance
