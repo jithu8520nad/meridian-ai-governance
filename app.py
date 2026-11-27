@@ -32,10 +32,14 @@ st.markdown("""<style>
 
 CONFIG_VERSION = "BANK-AI-PMO-APP-v2.2"
 
+PUBLIC_DEMO = os.environ.get("MERIDIAN_PUBLIC_DEMO") == "1"
+
 with st.sidebar:
     st.header("1. Controlled Master Workbooks")
-    curr_up = st.file_uploader("Current Period Workbook (.xlsx) *", type=["xlsx"], key="curr")
-    prev_up = st.file_uploader("Comparison / Prior Workbook (.xlsx)", type=["xlsx"], key="prev")
+    if PUBLIC_DEMO:
+        st.info("Fictional data only. Do not enter personal or confidential information.")
+    curr_up = None if PUBLIC_DEMO else st.file_uploader("Current Period Workbook (.xlsx) *", type=["xlsx"], key="curr")
+    prev_up = None if PUBLIC_DEMO else st.file_uploader("Comparison / Prior Workbook (.xlsx)", type=["xlsx"], key="prev")
     if "run_prev_cmp" not in st.session_state:
         st.session_state["run_prev_cmp"] = True
     c_btn1, c_btn2 = st.columns(2)
@@ -45,14 +49,14 @@ with st.sidebar:
         st.session_state["run_prev_cmp"] = False
     st.divider()
     st.header("2. Optional LLM Commentary")
-    api_key = st.text_input("Gemini API Key (blank = Deterministic)", type="password")
+    api_key = "" if PUBLIC_DEMO else st.text_input("Gemini API Key (blank = Deterministic)", type="password")
     st.divider()
     st.header("3. Next-Month Rollover Controls")
     next_cutoff = st.text_input("Next Month Cutoff (YYYY-MM-DD)", "2026-12-31")
     ev_auth = st.checkbox("Authorise staged event for rollover", value=False)
     ev_desc = st.text_input("Event description", "")
     ev_evid = st.text_input("Evidence ID (required if event supplied)", "")
-    ev_rev = st.text_input("Simulated Reviewer Name", "Jithu Nadviledath")
+    ev_rev = st.text_input("Simulated Reviewer Name", "Demo Reviewer")
 
 curr_bytes = curr_up.getvalue() if curr_up else None
 curr_name = curr_up.name if curr_up else None
